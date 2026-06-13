@@ -13,3 +13,9 @@ jobs:
           curl -fsS -m 320 -X POST \
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
             "${{ secrets.SITE_URL }}/api/ingest/coingecko"
+      - name: ingesta bnb chain (defillama + artemis)
+        if: always()
+        run: |
+          curl -fsS -m 150 -X POST \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "${{ secrets.SITE_URL }}/api/ingest/bnb"
