@@ -19,3 +19,9 @@ jobs:
           curl -fsS -m 150 -X POST \
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
             "${{ secrets.SITE_URL }}/api/ingest/bnb"
+      - name: ingesta noticias (anuncios Binance + impacto, incremental)
+        if: always()
+        run: |
+          curl -fsS -m 300 -X POST \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "${{ secrets.SITE_URL }}/api/ingest/news?pages=2"
