@@ -43,3 +43,9 @@ jobs:
           curl -fsS -m 80 -X POST \
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
             "${{ secrets.SITE_URL }}/api/ingest/stables"
+      - name: ingesta leaderboard de exchanges (coingecko)
+        if: always()
+        run: |
+          curl -fsS -m 80 -X POST \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "${{ secrets.SITE_URL }}/api/ingest/exchanges"

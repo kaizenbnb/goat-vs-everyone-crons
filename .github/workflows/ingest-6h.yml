@@ -19,3 +19,9 @@ jobs:
           curl -fsS -m 90 -X POST \
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
             "${{ secrets.SITE_URL }}/api/ingest/research"
+      - name: ingesta listings recientes (fapi onboardDate + klines)
+        if: always()
+        run: |
+          curl -fsS -m 120 -X POST \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "${{ secrets.SITE_URL }}/api/ingest/listings"
