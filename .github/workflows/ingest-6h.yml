@@ -13,3 +13,9 @@ jobs:
           curl -fsS -m 150 -X POST \
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
             "${{ secrets.SITE_URL }}/api/ingest/leadership"
+      - name: ingesta binance research (telegram)
+        if: always()
+        run: |
+          curl -fsS -m 90 -X POST \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "${{ secrets.SITE_URL }}/api/ingest/research"
