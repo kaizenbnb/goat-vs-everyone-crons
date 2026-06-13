@@ -49,3 +49,9 @@ jobs:
           curl -fsS -m 80 -X POST \
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
             "${{ secrets.SITE_URL }}/api/ingest/exchanges"
+      - name: ingesta terminal (heatmap coingecko + posicionamiento fapi)
+        if: always()
+        run: |
+          curl -fsS -m 90 -X POST \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "${{ secrets.SITE_URL }}/api/ingest/terminal"
