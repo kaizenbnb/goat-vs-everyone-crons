@@ -1,0 +1,85 @@
+name: smartmoney
+# Smart Money on-chain: el runner parsea el leaderboard de Hyperliquid (~32MB, demasiado para
+# Vercel), saca los top 25 por PnL 30d, consulta sus posiciones (clearinghouseState) y POSTea
+# { wallets } al ingest, que agrega y guarda. Cada 6h.
+on:
+  schedule:
+    - cron: '37 */6 * * *'
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: smart money (top hyperliquid traders + posiciones)
+        env:
+          SITE_URL: ${{ secrets.SITE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          cat > sm.mjs <<'EOF'
+          const LB = 'https://stats-data.hyperliquid.xyz/Mainnet/leaderboard';
+          const INFO = 'https://api.hyperliquid.xyz/info';
+          const SITE = process.env.SITE_URL;
+          const SECRET = process.env.CRON_SECRET;
+
+          const pnl = (row, win) => {
+            const e = (row.windowPerformances || []).find((x) => x[0] === win);
+            return e ? Number(e[1].pnl) : 0;
+          };
+
+          async function main() {
+            const lb = await (await fetch(LB)).json();
+            const rows = lb.leaderboardRows || [];
+            const top = rows
+              .map((r) => ({
+                addr: r.ethAddress,
+                accountValue: Number(r.accountValue),
+                pnlMonth: pnl(r, 'month'),
+                pnlAllTime: pnl(r, 'allTime'),
+              }))
+              .filter((r) => r.addr && r.accountValue > 100000)
+              .sort((a, b) => b.pnlMonth - a.pnlMonth)
+              .slice(0, 25);
+
+            const wallets = [];
+            for (const w of top) {
+              try {
+                const cs = await (
+                  await fetch(INFO, {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify({ type: 'clearinghouseState', user: w.addr }),
+                  })
+                ).json();
+                const positions = (cs.assetPositions || [])
+                  .map((p) => {
+                    const x = p.position || {};
+                    const szi = Number(x.szi);
+                    return {
+                      coin: x.coin,
+                      dir: szi >= 0 ? 'long' : 'short',
+                      notionalUsd: Math.abs(Number(x.positionValue) || 0),
+                      unrealizedPnl: Number(x.unrealizedPnl) || 0,
+                      leverage: Number(x.leverage && x.leverage.value) || 0,
+                    };
+                  })
+                  .filter((p) => p.coin && p.notionalUsd > 0);
+                wallets.push({ ...w, positions });
+              } catch (e) {
+                console.error('skip', w.addr, e.message);
+              }
+              await new Promise((r) => setTimeout(r, 120));
+            }
+
+            const res = await fetch(SITE + '/api/ingest/smartmoney', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json', authorization: 'Bearer ' + SECRET },
+              body: JSON.stringify({ wallets }),
+            });
+            const txt = await res.text();
+            console.log('ingest', res.status, txt);
+            if (!res.ok) process.exit(1);
+          }
+          main().catch((e) => { console.error(e); process.exit(1); });
+          EOF
+          node sm.mjs
