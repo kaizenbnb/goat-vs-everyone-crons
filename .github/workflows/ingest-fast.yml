@@ -19,3 +19,9 @@ jobs:
           curl -fsS -m 60 -X POST \
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
             "${{ secrets.SITE_URL }}/api/ingest/hyperliquid"
+      - name: ingesta reservas (proof-of-reserves DefiLlama, frescura critica para el usuario)
+        if: always()
+        run: |
+          curl -fsS -m 80 -X POST \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "${{ secrets.SITE_URL }}/api/ingest/reserves"
