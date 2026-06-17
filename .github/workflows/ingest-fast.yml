@@ -1,27 +1,45 @@
 name: ingest-fast
+# Frescura de datos "en vivo" (volumen spot+futuros, Hyperliquid, proof-of-reserves).
+#
+# Antes: cron '*/5 * * * *' (cada 5 min). GitHub Actions estrangula los schedules de alta
+# frecuencia en el free tier: la cadencia REAL medida era ~3h de media (hasta 5.2h). Los cron
+# HORARIOS sí se cumplen en este repo (ver ingest-hourly), así que en vez de pelear con el
+# scheduler nos desacoplamos: arranque horario fiable + loop interno que hace 4 ticks dentro
+# de la misma ejecución (cada ~15 min). El repo es público => minutos de Actions ilimitados,
+# un job que vive ~45 min no cuesta nada. Frescura objetivo ~15 min, degradando a ~30 min solo
+# si GitHub se salta un arranque horario completo.
 on:
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '12 * * * *'
   workflow_dispatch:
+
+concurrency:
+  group: ingest-fast
+  cancel-in-progress: true
 
 jobs:
   ping:
     runs-on: ubuntu-latest
+    timeout-minutes: 55
     steps:
-      - name: ingesta binance (spot + futuros)
+      - name: ingesta rápida (binance + hyperliquid + reservas) · 4 ticks/hora
+        env:
+          SITE_URL: ${{ secrets.SITE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
-          curl -fsS -m 90 -X POST \
-            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            "${{ secrets.SITE_URL }}/api/ingest/binance"
-      - name: ingesta hyperliquid
-        if: always()
-        run: |
-          curl -fsS -m 60 -X POST \
-            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            "${{ secrets.SITE_URL }}/api/ingest/hyperliquid"
-      - name: ingesta reservas (proof-of-reserves DefiLlama, frescura critica para el usuario)
-        if: always()
-        run: |
-          curl -fsS -m 80 -X POST \
-            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            "${{ secrets.SITE_URL }}/api/ingest/reserves"
+          fail=0
+          tick() {
+            echo "── tick $1 · $(date -u '+%H:%M:%S')Z ──"
+            for ep in binance hyperliquid reserves; do
+              code=$(curl -sS -m 90 -o /dev/null -w '%{http_code}' -X POST \
+                -H "Authorization: Bearer $CRON_SECRET" \
+                "$SITE_URL/api/ingest/$ep") || code=000
+              echo "  $ep → $code"
+              [ "$code" = "200" ] || fail=1
+            done
+          }
+          for i in 1 2 3 4; do
+            tick "$i"
+            [ "$i" -lt 4 ] && sleep 900   # 15 min entre ticks
+          done
+          exit $fail
