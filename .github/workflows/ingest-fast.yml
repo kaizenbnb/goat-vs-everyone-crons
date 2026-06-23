@@ -1,16 +1,22 @@
 name: ingest-fast
-# Frescura de datos "en vivo" (volumen spot+futuros, Hyperliquid, proof-of-reserves).
+# Frescura de datos "en vivo": volumen spot+futuros, Hyperliquid, proof-of-reserves.
 #
-# Antes: cron '*/5 * * * *' (cada 5 min). GitHub Actions estrangula los schedules de alta
-# frecuencia en el free tier: la cadencia REAL medida era ~3h de media (hasta 5.2h). Los cron
-# HORARIOS sí se cumplen en este repo (ver ingest-hourly), así que en vez de pelear con el
-# scheduler nos desacoplamos: arranque horario fiable + loop interno que hace 4 ticks dentro
-# de la misma ejecución (cada ~15 min). El repo es público => minutos de Actions ilimitados,
-# un job que vive ~45 min no cuesta nada. Frescura objetivo ~15 min, degradando a ~30 min solo
-# si GitHub se salta un arranque horario completo.
+# GitHub Actions estrangula los `schedule:` de alta frecuencia. En este repo los arranques
+# horarios solicitados llegaban de media cada ~4h (medido jun-2026), NO cada hora. Pelear con
+# el scheduler no sirve. Lo que GitHub SÍ respeta son los jobs LARGOS: un runner puede vivir
+# hasta 6h sin que lo molesten. Estrategia:
+#
+#   - el job vive ~5h50 y hace un "tick" cada 15 min (POST a binance/hyperliquid/reserves);
+#   - pedimos arranque cada 30 min, pero asumimos que GitHub concederá pocos;
+#   - cancel-in-progress: true -> cuando GitHub SÍ concede un arranque nuevo, mata al job viejo
+#     y el nuevo arranca con un tick inmediato y sigue ticando. Nunca hay dos a la vez ni
+#     huecos: si GitHub se salta arranques durante horas, el job en curso cubre el vacío.
+#
+# Resultado: frescura continua ~15 min. Repo público => minutos de Actions ilimitados; un job
+# que vive ~6h no cuesta nada.
 on:
   schedule:
-    - cron: '12 * * * *'
+    - cron: '*/30 * * * *'
   workflow_dispatch:
 
 concurrency:
@@ -20,26 +26,37 @@ concurrency:
 jobs:
   ping:
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 350
     steps:
-      - name: ingesta rápida (binance + hyperliquid + reservas) · 4 ticks/hora
+      - name: ingesta rapida (binance + hyperliquid + reservas) · tick/15min ~5h50
         env:
           SITE_URL: ${{ secrets.SITE_URL }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
-          fail=0
-          tick() {
-            echo "── tick $1 · $(date -u '+%H:%M:%S')Z ──"
-            for ep in binance hyperliquid reserves; do
+          set -u
+          : "${SITE_URL:?falta el secret SITE_URL}"
+          : "${CRON_SECRET:?falta el secret CRON_SECRET}"
+
+          INTERVAL=900          # 15 min entre ticks
+          WINDOW=20400          # ~5h40 de ticks; deja margen al timeout de 350 min
+          ENDPOINTS="binance hyperliquid reserves"
+
+          end=$(( $(date +%s) + WINDOW ))
+          ticks=0; ok=0; bad=0
+          while :; do
+            ticks=$((ticks + 1))
+            echo "── tick $ticks · $(date -u '+%H:%M:%S')Z ──"
+            for ep in $ENDPOINTS; do
               code=$(curl -sS -m 90 -o /dev/null -w '%{http_code}' -X POST \
                 -H "Authorization: Bearer $CRON_SECRET" \
                 "$SITE_URL/api/ingest/$ep") || code=000
+              if [ "$code" = "200" ]; then ok=$((ok + 1)); else bad=$((bad + 1)); fi
               echo "  $ep → $code"
-              [ "$code" = "200" ] || fail=1
             done
-          }
-          for i in 1 2 3 4; do
-            tick "$i"
-            [ "$i" -lt 4 ] && sleep 900   # 15 min entre ticks
+            [ $(( $(date +%s) + INTERVAL )) -ge "$end" ] && break
+            sleep "$INTERVAL"
           done
-          exit $fail
+          echo "── fin · $ticks ticks · $ok ok / $bad fallos ──"
+          # No fallamos el job por errores transitorios de un endpoint (romperian la frescura).
+          # Solo fallamos si NINGUN POST tuvo exito en toda la ventana (incidencia real).
+          [ "$ok" -gt 0 ] || exit 1

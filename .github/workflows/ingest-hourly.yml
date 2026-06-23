@@ -1,51 +1,51 @@
 name: ingest-hourly
+# Mismo patron que ingest-fast (ver ese archivo para el porque): job largo auto-solapado que
+# tickea cada hora, porque los arranques `schedule:` de GitHub llegan de media cada ~4h, no cada
+# hora. El job vive ~5h50 y refresca los 7 endpoints horarios una vez por hora; cancel-in-progress
+# hace que un arranque nuevo releve al viejo sin huecos.
 on:
   schedule:
-    - cron: '7 * * * *'
+    - cron: '*/30 * * * *'
   workflow_dispatch:
+
+concurrency:
+  group: ingest-hourly
+  cancel-in-progress: true
 
 jobs:
   ping:
     runs-on: ubuntu-latest
+    timeout-minutes: 350
     steps:
-      - name: ingesta coingecko
+      - name: ingesta horaria (coingecko, bnb, news, pulse, stables, exchanges, terminal) · tick/1h ~5h50
+        env:
+          SITE_URL: ${{ secrets.SITE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
-          curl -fsS -m 320 -X POST \
-            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            "${{ secrets.SITE_URL }}/api/ingest/coingecko"
-      - name: ingesta bnb chain (defillama + artemis)
-        if: always()
-        run: |
-          curl -fsS -m 150 -X POST \
-            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            "${{ secrets.SITE_URL }}/api/ingest/bnb"
-      - name: ingesta noticias (anuncios Binance + impacto, incremental)
-        if: always()
-        run: |
-          curl -fsS -m 300 -X POST \
-            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            "${{ secrets.SITE_URL }}/api/ingest/news?pages=2"
-      - name: ingesta pulse (fear&greed + movers + funding + duelo + mercado)
-        if: always()
-        run: |
-          curl -fsS -m 120 -X POST \
-            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            "${{ secrets.SITE_URL }}/api/ingest/pulse"
-      - name: ingesta stables (stablecoins por cadena)
-        if: always()
-        run: |
-          curl -fsS -m 80 -X POST \
-            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            "${{ secrets.SITE_URL }}/api/ingest/stables"
-      - name: ingesta leaderboard de exchanges (coingecko)
-        if: always()
-        run: |
-          curl -fsS -m 80 -X POST \
-            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            "${{ secrets.SITE_URL }}/api/ingest/exchanges"
-      - name: ingesta terminal (heatmap coingecko + posicionamiento fapi)
-        if: always()
-        run: |
-          curl -fsS -m 90 -X POST \
-            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            "${{ secrets.SITE_URL }}/api/ingest/terminal"
+          set -u
+          : "${SITE_URL:?falta el secret SITE_URL}"
+          : "${CRON_SECRET:?falta el secret CRON_SECRET}"
+
+          INTERVAL=3600         # 1 h entre ticks
+          WINDOW=20400          # ~5h40 de ticks; margen al timeout de 350 min
+          ENDPOINTS="coingecko bnb news?pages=2 pulse stables exchanges terminal"
+
+          end=$(( $(date +%s) + WINDOW ))
+          ticks=0; ok=0; bad=0
+          while :; do
+            ticks=$((ticks + 1))
+            echo "── tick $ticks · $(date -u '+%H:%M:%S')Z ──"
+            for ep in $ENDPOINTS; do
+              code=$(curl -sS -m 320 -o /dev/null -w '%{http_code}' -X POST \
+                -H "Authorization: Bearer $CRON_SECRET" \
+                "$SITE_URL/api/ingest/$ep") || code=000
+              if [ "$code" = "200" ]; then ok=$((ok + 1)); else bad=$((bad + 1)); fi
+              echo "  $ep → $code"
+            done
+            [ $(( $(date +%s) + INTERVAL )) -ge "$end" ] && break
+            sleep "$INTERVAL"
+          done
+          echo "── fin · $ticks ticks · $ok ok / $bad fallos ──"
+          # No fallamos el job por errores transitorios de un endpoint (romperian la frescura).
+          # Solo fallamos si NINGUN POST tuvo exito en toda la ventana (incidencia real).
+          [ "$ok" -gt 0 ] || exit 1

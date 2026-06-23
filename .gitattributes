@@ -1,0 +1,6 @@
+# Los workflows contienen scripts bash que corren en runners Linux.
+# Forzar LF evita el bug "$'\r': command not found" si se editan desde Windows.
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.md   text eol=lf
+*.mjs  text eol=lf
