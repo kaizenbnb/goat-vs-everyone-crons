@@ -28,7 +28,7 @@ jobs:
 
           INTERVAL=3600         # 1 h entre ticks
           WINDOW=20400          # ~5h40 de ticks; margen al timeout de 350 min
-          ENDPOINTS="coingecko bnb news?pages=2 pulse stables exchanges terminal"
+          ENDPOINTS="coingecko bnb news?pages=2 pulse stables exchanges terminal regnews"
 
           end=$(( $(date +%s) + WINDOW ))
           ticks=0; ok=0; bad=0
