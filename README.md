@@ -1,84 +1,34 @@
 # goat-vs-everyone ingestion crons
 
-Scheduled GitHub Actions that keep the public data behind [goat-vs-everyone.vercel.app](https://goat-vs-everyone.vercel.app) fresh.
+This repository used to be the timer infrastructure for [goat-vs-everyone.vercel.app](https://goat-vs-everyone.vercel.app): scheduled GitHub Actions workflows calling authenticated ingestion endpoints on a schedule.
 
-This repository is timer infrastructure only. There is no application code and no data here. The Next.js app and its data layer live in a separate private repository. What lives here are the workflows that call authenticated ingestion endpoints on a schedule, so the live index always has recent market data to show.
+## 2026-11-05: moved off GitHub Actions `schedule:`
 
-## What this repo is, and what it is not
+On 2026-08-25 GitHub silently disabled all 4 scheduled workflows in this repo because the repo had gone 60 days without a push (last push: 2026-06-26). That is a hard GitHub Actions policy for public and private repos alike: a `schedule:` trigger is auto-disabled after 60 days of repository inactivity, with no notification. The result was zero ingestion for over two months — the live index kept serving August data without anyone noticing.
 
-- It is: a set of scheduled jobs that trigger data ingestion on a fixed cadence.
-- It is not: the app, the database, or the business logic. Those are private.
+This was the second reliability problem with GitHub Actions as the trigger for this project, not the first: `schedule:` is also throttled under load (a workflow asked to run every 30 min was observed firing roughly every 4h), which is why `ingest-fast` and `ingest-hourly` used to run as long-lived, self-overlapping jobs that ticked internally — a workaround for the throttling, not for the 60-day disable.
 
-The separation is deliberate. Secrets and product code stay in the private repo, while the public side is just the timing layer. Anyone can read exactly how the scheduling works without getting access to anything sensitive.
+Both problems go away by not using `schedule:` at all:
 
-## The problem: GitHub throttles frequent cron
+- `ingest-fast`, `ingest-hourly`, `ingest-6h` are **retired**. Their job is now done by three aggregator routes in the Next.js app itself (`/api/cron/fast`, `/api/cron/hourly`, `/api/cron/sixhourly`), each fanning out in parallel to the relevant `/api/ingest/*` endpoints. An external pinger (cron-job.org, free tier) calls each one directly at its real cadence (15 min / hourly / 6h) with the `CRON_SECRET` bearer header. No GitHub repo, no 60-day clock, no schedule throttling.
+- `smartmoney` **stays here**, because its leaderboard fetch (~32MB from Hyperliquid) and per-wallet position lookups are too heavy to run as a Vercel function. It now triggers on `workflow_dispatch` only (no `schedule:`), called every 6h by the same external pinger hitting the GitHub Actions API (`POST /repos/kaizenbnb/goat-vs-everyone-crons/actions/workflows/smartmoney.yml/dispatches`) with a fine-grained PAT scoped to `actions: write` on this repo. `workflow_dispatch` is not subject to the 60-day inactivity auto-disable — only `schedule:` is.
 
-GitHub Actions `schedule:` triggers are not guaranteed to fire on time. Under load they are delayed, and high frequency schedules suffer the most. In practice, a workflow asked to run every hour was being delivered only every four hours or so. For a live market index, that is too stale.
+## What's left here
 
-A naive fix would be to schedule many short runs and hope enough of them fire. That wastes minutes and still leaves gaps.
-
-## The solution: long-lived, self-overlapping jobs
-
-The two freshness critical workflows do not rely on frequent short runs. Each one runs as a single long-lived job that lives for about five hours and fifty minutes and ticks internally on its own interval. Before one job reaches its time limit, the next scheduled run starts, and `cancel-in-progress` lets the new run relieve the old one. The handover happens without ever opening a gap in coverage.
-
-```text
-run A  |==============tick.tick.tick==============|
-run B                                     |==============tick.tick.tick==============|
-                                          ^ B starts and relieves A before A expires
-                                          no gap in data freshness
-```
-
-This keeps the data flowing at the real cadence the index needs, instead of the cadence GitHub feels like delivering.
-
-## The workflows
-
-| Workflow | Cadence | Data it refreshes |
+| Workflow | Trigger | Data it refreshes |
 | --- | --- | --- |
-| `ingest-fast` | long job, ticks every 15 min | Binance spot and futures, Hyperliquid perps, CEX reserves and flows |
-| `ingest-hourly` | long job, ticks every hour | CoinGecko exchange volumes, BTC price, daily series, derivatives, BNB data, news, pulse, stables, exchanges and terminal data |
-| `ingest-6h` | every 6 hours | asset leadership, Binance Research, recent listings and ESMA MiCA public registers |
-| `smartmoney` | every 6 hours | Hyperliquid smart-money leaderboard snapshots |
+| `smartmoney` | `workflow_dispatch`, called every 6h by the external pinger | Hyperliquid smart-money leaderboard snapshots |
 
-`ingest-fast` and `ingest-hourly` are the two that use the long-lived, self-overlapping pattern. `ingest-6h` and `smartmoney` run on a plain schedule because a few hours of delay does not hurt that kind of data.
-
-## How it fits together
-
-```text
-GitHub Actions (this repo)
-        |
-        |  scheduled trigger
-        v
-Authenticated ingestion endpoint   <-- protected by CRON_SECRET
-        |
-        v
-Private app and data layer (Next.js)
-        |
-        v
-Public index at goat-vs-everyone.vercel.app
-```
-
-The workflows never touch the data directly. They call an endpoint that does the work, and they prove they are allowed to by sending a shared secret.
+Everything else lives in the private Next.js app's `/api/cron/*` routes, called directly by the external pinger. See that repo for `fast` / `hourly` / `sixhourly` group membership.
 
 ## Configuration
 
-These workflows expect two repository secrets:
-
 | Secret | Purpose |
 | --- | --- |
-| `CRON_SECRET` | Shared token sent with each request so the ingestion endpoint can reject anything that is not these jobs. |
-| `SITE_URL` | Base URL of the deployment the jobs should hit. |
+| `CRON_SECRET` | Shared token the `smartmoney` script sends to `/api/ingest/smartmoney` so the endpoint can reject anything that is not this job. |
+| `SITE_URL` | Base URL of the deployment `smartmoney` should POST its result to. |
 
 No values are committed. Set them under Settings, Secrets and variables, Actions.
-
-## Design notes
-
-- Long jobs over frequent short jobs, because GitHub delivers them more reliably and the internal tick gives precise timing.
-- `cancel-in-progress` so a fresh run cleanly takes over from the previous one without two jobs fighting over the same window.
-- Public timing layer, private product, so the schedule is transparent while secrets and code stay protected.
-
-## Scope and limitations
-
-This repo only schedules and triggers ingestion. It does not store, transform or serve data. It also depends on GitHub runner availability, so the long-lived pattern is a mitigation for cron throttling, not a hard real time guarantee.
 
 ## Author
 

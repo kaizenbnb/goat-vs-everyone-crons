@@ -2,9 +2,12 @@ name: smartmoney
 # Smart Money on-chain: el runner parsea el leaderboard de Hyperliquid (~32MB, demasiado para
 # Vercel), saca los top 25 por PnL 30d, consulta sus posiciones (clearinghouseState) y POSTea
 # { wallets } al ingest, que agrega y guarda. Cada 6h.
+#
+# SOLO workflow_dispatch: un pinger externo (cron-job.org) llama cada 6h a la API de GitHub
+# (POST /repos/.../actions/workflows/smartmoney.yml/dispatches) para arrancar este job. Sin
+# `schedule:` no hay nada que GitHub pueda desactivar por 60 dias de inactividad del repo, que
+# es justo lo que apago los 4 workflows de este repo el 25-ago-2026.
 on:
-  schedule:
-    - cron: '37 */6 * * *'
   workflow_dispatch:
 
 jobs:
