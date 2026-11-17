@@ -1,7 +1,7 @@
 name: ingest-6h
+# Sin schedule desde nov-2026: estos endpoints van ahora dentro de ingest-hourly.yml (cada 6 ticks),
+# porque GitHub entregaba este cron con ~12h de retraso. Se conserva para lanzarlo a mano.
 on:
-  schedule:
-    - cron: '17 */6 * * *'
   workflow_dispatch:
 
 jobs:

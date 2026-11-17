@@ -23,6 +23,11 @@ concurrency:
   group: ingest-fast
   cancel-in-progress: true
 
+# actions:write solo para el relevo (workflow_dispatch de si mismo al final de la ventana).
+permissions:
+  contents: read
+  actions: write
+
 jobs:
   ping:
     runs-on: ubuntu-latest
@@ -60,3 +65,12 @@ jobs:
           # No fallamos el job por errores transitorios de un endpoint (romperian la frescura).
           # Solo fallamos si NINGUN POST tuvo exito en toda la ventana (incidencia real).
           [ "$ok" -gt 0 ] || exit 1
+      # Relevo: GitHub concede los arranques programados cada ~8h y la ventana dura ~5h40, lo que
+      # dejaba huecos de 3-5h sin ingesta (medido nov-2026). Al cerrar la ventana, este job lanza
+      # el siguiente: cadena continua. Si GitHub mata el job (cancel-in-progress por un arranque
+      # nuevo), no se relanza: ya hay otro corriendo. Los schedules quedan como respaldo.
+      - name: relevo · lanzar la siguiente ventana
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run ingest-fast.yml -R "${{ github.repository }}" --ref "${{ github.ref_name }}"
